@@ -71,6 +71,15 @@ class SpectrumAwgOut(labscript.Output):
     """
     Starts a waveform :obj:`wave` playing on the channel at time :obj:`time`.
     This waveform will keep looping until either another :meth:`loop` or :meth:`wait` command is called at a later time.
+
+    .. note::
+
+      The length of this waveform must be a multiple of :obj:`32`.
+      Also, when using multiple channels, you must make sure that each waveform being looped has the same length.
+
+    .. note::
+
+      If you are triggering the card, you will need to trigger the card the first time :meth:`loop` is called, as well as every time :meth:`loop` is called after :meth:`wait` is called.
     
     PARAMETERS
     ----------
@@ -89,7 +98,7 @@ class SpectrumAwgOut(labscript.Output):
     if wave.size % 32:
       raise ValueError("Waveform length must be a multiple of 32.")
     
-    self.parent_device.loop(int(self.connection), time, wave)
+    self.parent_device._loop(int(self.connection), time, wave)
     return time
 
   def wait(self, time):
@@ -98,13 +107,17 @@ class SpectrumAwgOut(labscript.Output):
     That is, it stops a waveform from looping (that was set started by a :meth:`loop`)
     It will stay dormant until another :meth:`loop` command is called at a later time (or call it at the end of a sequence).
 
+    .. warning::
+
+      In the current implementation, calling :meth:`wait` on one channel will disable all channels.
+
     PARAMETERS
     ----------
     time : :obj:`float`
       The time at which to start playing the waveform.
 
     """
-    self.parent_device.wait(int(self.connection), time)
+    self.parent_device._wait(int(self.connection), time)
     return time
   
   def init_amplitude(self, amplitude):
@@ -120,7 +133,7 @@ class SpectrumAwgOut(labscript.Output):
       Amplitude in volts.
       Will be precise to the nearest millivolt.
     """
-    self.parent_device.init_amplitude(int(self.connection), amplitude)
+    self.parent_device._init_amplitude(int(self.connection), amplitude)
   
 class SpectrumAwgOutCopy(labscript.Output):
   """
@@ -128,6 +141,7 @@ class SpectrumAwgOutCopy(labscript.Output):
   This particular output port will copy the behaviour of another port (see double and differential output modes in AWG manual).
 
   .. note::
+
     A port can only be copied if it has an even port number, and the port that copies it must have the next port number after that.
     For example, port 3 can only copy port 2.
 
@@ -151,7 +165,7 @@ class SpectrumAwgOutCopy(labscript.Output):
     self.differential = differential
     self.copied_device = copied_device
 
-    self.parent_device.make_copy(copied_device.connection, connection, differential)
+    self.parent_device._make_copy(copied_device.connection, connection, differential)
 
   def init_amplitude(self, amplitude):
     """
@@ -166,7 +180,7 @@ class SpectrumAwgOutCopy(labscript.Output):
       Amplitude in volts.
       Will be precise to the nearest millivolt.
     """
-    self.parent_device.init_amplitude(int(self.connection), amplitude)
+    self.parent_device._init_amplitude(int(self.connection), amplitude)
 
 #  =============================================================================================================
 #   _____                                                           ============================================
@@ -180,13 +194,31 @@ class SpectrumAwgOutCopy(labscript.Output):
 #  =============================================================================================================
 
 class SpectrumAwg(labscript.Device):
+  """
+  A :obj:`labscript.Device` representing the AWG card itself.
+
+  PARAMETERS
+  ----------
+  name : :obj:`str`
+    Name of the card in labscript and BLACs.
+  BLACS_connection : :obj:`str`
+    The handle name of the card (as seen in Spectrum Control Center).
+    Defaults to :obj:`"/dev/spcm0"`, which should be correct if you are using a single, local card.
+  """
   description = "Spectrum AWG"
-  clock_limit = 1e6
-  trigger_delay =  4.781e-6#(7)s, from 2023-04-13 Alex Tritt
+
+  trigger_delay =  4.781e-6
+  """
+  The delay in seconds between the application of a trigger and a response from the card.
+  Measured as 4.781(7) us, from 2023-04-13 by Alex Tritt.
+  """
 
   allowed_children = [SpectrumAwgOut, SpectrumAwgOutCopy]
+  """
+  This device accepts output ports :obj:`SpectrumAwgOut` and copied output ports (that is ports running in double or differential modes) :obj:`SpectrumAwgOutCopy` as children.
+  """
 
-  def __init__(self, name, parent_device, BLACS_connection = "/dev/spcm0", **kwargs):
+  def __init__(self, name, BLACS_connection = "/dev/spcm0", **kwargs):
     self.BLACS_connection = BLACS_connection
     labscript.Device.__init__(self, name, None, **kwargs)
 
@@ -202,6 +234,50 @@ class SpectrumAwg(labscript.Device):
     self.re_arm_level     = 0
 
   def generate_code(self, hdf5_file):
+    """
+    Prepares the code based on commands in experiment file.
+    The :obj:`hdf5_file` is structured to contain information for instructions that the card natively understands; namely :obj:`"SEGMENT"` and :obj:`"SEQUENCE"` information.
+
+    The :obj:`"SEGMENT"` key points to a 3-dimensional array containing the waveforms themselves.
+    The array is structured :obj:`segments[segment_index, time_index, channel_index]`.
+    Each segment contains one waveform per channel.
+    That is, only one segment (one combination of waveforms) can be played at once.
+    
+    The :obj:`"SEGMENT"` array also contains attributes associated with the card waveforms:
+    
+    * :obj:`"LENGTHS"` is a :obj:`numpy.ndarray` of :obj:`int` of the length of each segment (this allows for zero padding)
+    * :obj:`"CONNECTIONS"` is a :obj:`numpy.ndarray` of :obj:`int` of the output ports being used in the sequence (excluding copies).
+    * :obj:`"SAMPLE_RATE"` is an :obj:`int` of the sample rate of the card in Hz.
+    * :obj:`"DIFFERENTIALS"` is a :obj:`numpy.ndarray` of any ports being copied in differential mode.
+    * :obj:`"COPIES"` is a :obj:`numpy.ndarray` of :obj:`int` of any ports being copied in double mode.
+    * :obj:`"AMPLITUDES"` is a :obj:`numpy.ndarray` of :obj:`float` of the amplitudes of ports, in volts.
+    * :obj:`"AMPLITUDE_INDICES"` is a :obj:`numpy.ndarray` of :obj:`int` of the output ports being used in the sequence (including copies). Amplitudes in :obj:`AMPLITUDES"` correspond to these ports.
+
+    This :obj:`generate_code` method unrolls the playing of simultaneous waveforms into a sequence of segments (waveforms played simultaneously across all channels).
+    While the segments are loaded into the :obj:`"SEGMENT"` array, the sequence instructions are saved into a :obj:`"SEQUENCE"` :obj:`h5py.Group`.
+    The :obj:`"SEQUENCE"` :obj:`h5py.Group` contains a :obj:`numpy.ndarray` for all the parameters used when programming a sequence on the card.
+    Namely,
+
+    * :obj:`"STEP"` :obj:`numpy.ndarray` of :obj:`int`: the step in the sequence.
+    * :obj:`"NEXT_STEP"` :obj:`numpy.ndarray` of :obj:`int`: the step that this step will follow on to.
+    * :obj:`"SEGMENT"` :obj:`numpy.ndarray` of :obj:`int`: the segment that plays during this step.
+    * :obj:`"LOOPS"` :obj:`numpy.ndarray` of :obj:`int`: The number of times the segment should be looped during this step.
+    * :obj:`"END_OF_SEQUENCE"` :obj:`numpy.ndarray` of :obj:`bool`: if :obj:`True`, the card exits the sequence and (if appropriate) will prepare for the next one.
+    * :obj:`"LOOP_UNTIL_TRIGGER"` :obj:`numpy.ndarray` of :obj:`bool`: currently unused in this implementation.
+
+    The :obj:`"SEQUENCE"` :obj:`h5py.Group` also contains some attributes relating to sequencing and triggers:
+
+    * :obj:`"START_STEPS"`: a :obj:`numpy.ndarray` of :obj:`int that determines the start point of the different sequences. A new sequence is started every time :meth:`SpectrumAwgOut.loop` is called after a call of :meth:`SpectrumAwgOut.wait`.
+    * :obj:`"SOFTWARE_TRIGGER"`: a :obj:`bool` where if :obj:`True`, the card will be triggered automatically (with inconsistent timing) as soon as the shot is loaded in BLACs.
+    * :obj:`"TRIGGER_LEVEL"`: a :obj:`float` that determines the voltage on the trigger port that will trigger the card when first reached (that is, triggering happens on a positive edge).
+    * :obj:`"RE_ARM_LEVEL"`: the voltage level that the trigger port must reach after a trigger before it is able to accept a second trigger.
+    * :obj:`"TRIGGER_PORT"`: the trigger port number for the active trigger.
+
+    PARAMETERS
+    ----------
+    hdf5_file : :obj:`h5py.File`
+      The HDF5 file to be written to.
+    """
     labscript.Device.generate_code(self, hdf5_file)
     
     if len(self.instructions) == 0:
@@ -336,13 +412,47 @@ class SpectrumAwg(labscript.Device):
     sequence_group["END_OF_SEQUENCE"]     = np.array(sequence["end_of_sequence"],     dtype = bool)
     sequence_group["LOOP_UNTIL_TRIGGER"]  = np.array(sequence["loop_until_trigger"],  dtype = bool)
     sequence_group.attrs["START_STEPS"]   = np.array(start_steps,                     dtype = int)
-    
+
     sequence_group.attrs["SOFTWARE_TRIGGER"]  = self.software_trigger
     sequence_group.attrs["TRIGGER_LEVEL"]     = self.trigger_level
     sequence_group.attrs["RE_ARM_LEVEL"]      = self.re_arm_level
     sequence_group.attrs["TRIGGER_PORT"]      = self.trigger_port
 
-  def loop(self, connection, time, wave):
+  def init_sample_rate(self, sample_rate):
+    """
+    Sets the sample rate of the AWG.
+    Will stay constant for the whole sequence.
+
+    PARAMETERS
+    ----------
+    sample_rate : :obj:`float`
+      The sample rate in Hz.
+    """
+    self.sample_rate = sample_rate
+
+  def init_trigger(self, port, level, re_arm_level = None):
+    """
+    Sets triggering setup for the AWG.
+    If not called, the card will automatically be software triggered at the start of a shot.
+
+    PARAMETERS
+    ----------
+    port : :obj:`int`
+      The trigger port to be used.
+    level : :obj:`float`
+      The voltage on the trigger port that will trigger the card when first reached (that is, triggering happens on a positive edge).
+    re_arm_level : :obj:`float`
+      The voltage level that the trigger port must reach after a trigger before it is able to accept a second trigger.
+      If :obj:`None` (default), will be set to :obj:`level/2`.
+    """
+    if re_arm_level is None:
+      re_arm_level = 0.5*level
+    self.software_trigger = False
+    self.trigger_port     = port
+    self.trigger_level    = float(level)
+    self.re_arm_level     = float(re_arm_level)
+
+  def _loop(self, connection, time, wave):
     wave_index = None
     for wave_table_index, wave_table_instance in enumerate(self.wave_table):
       if wave_table_instance is wave:
@@ -359,7 +469,7 @@ class SpectrumAwg(labscript.Device):
         "wave_index"  : wave_index
       }
     )
-  def wait(self, connection, time):
+  def _wait(self, connection, time):
     self.instructions.append(
       {
         "instruction" : "wait",
@@ -368,7 +478,7 @@ class SpectrumAwg(labscript.Device):
       }
     )
 
-  def make_copy(self, server, client, differential):
+  def _make_copy(self, server, client, differential):
     server = int(server)
     client = int(client)
     if client - server != 1:
@@ -379,19 +489,8 @@ class SpectrumAwg(labscript.Device):
     else:
       self.copies.append(server)
 
-  def init_sample_rate(self, sample_rate):
-    self.sample_rate = sample_rate
-
-  def init_amplitude(self, connection, amplitude):
+  def _init_amplitude(self, connection, amplitude):
     self.amplitudes.append([connection, amplitude])
-
-  def init_trigger(self, port, level, re_arm_level = None):
-    if re_arm_level is None:
-      re_arm_level = 0.5*level
-    self.software_trigger = False
-    self.trigger_port     = port
-    self.trigger_level    = float(level)
-    self.re_arm_level     = float(re_arm_level)
 
 #  =============================================================================================================
 #   __  __ _     _         __ _ _       _     _                        _               =========================
