@@ -51,24 +51,101 @@ TIME_OUT = 1e-6
 #  =============================================================================================================
 
 class SpectrumAwgOut(labscript.Output):
+  """
+  A :obj:`labscript.Device` representing an individual output port of an AWG.
+
+  PARAMETERS
+  ----------
+  name : :obj:`str`
+    Name of the channel output in labscript and BLACs.
+  parent_device : :obj:`SpectrumAwg`
+    The AWG card that this output is a channel of.
+  connection : :obj:`str`
+    A string of the port index of the channel on the card.
+    For example, if this represents the channel sent to output port 2 on a 4-port card, write :obj:`"2"`.
+  """
   def __init__(self, name, parent_device, connection):
     super().__init__(name, parent_device, connection, default_value = 0)
 
   def loop(self, time, wave:np.ndarray):
+    """
+    Starts a waveform :obj:`wave` playing on the channel at time :obj:`time`.
+    This waveform will keep looping until either another :meth:`loop` or :meth:`wait` command is called at a later time.
+    
+    PARAMETERS
+    ----------
+    time : :obj:`float`
+      The time at which to start playing the waveform.
+    wave : :obj:`numpy.ndarray`
+      The waveform to be looped.
+      Samples should be between :obj:`-1.0` and :obj:`1.0`.
+      Note that the length of this waveform must be a multiple of :obj:`32`.
+
+    RAISES
+    ------
+    :obj:`ValueError` :
+      If the length of :obj:`wave` is not a multiple of :obj:`32`.
+    """
     if wave.size % 32:
-      raise Exception("Waveform length must be a multiple of 32.")
+      raise ValueError("Waveform length must be a multiple of 32.")
     
     self.parent_device.loop(int(self.connection), time, wave)
     return time
 
   def wait(self, time):
+    """
+    Stops the channel (and AWG card) from outputting anything.
+    That is, it stops a waveform from looping (that was set started by a :meth:`loop`)
+    It will stay dormant until another :meth:`loop` command is called at a later time (or call it at the end of a sequence).
+
+    PARAMETERS
+    ----------
+    time : :obj:`float`
+      The time at which to start playing the waveform.
+
+    """
     self.parent_device.wait(int(self.connection), time)
     return time
   
   def init_amplitude(self, amplitude):
+    """
+    Sets the amplitude of the output.
+    The output will vary from + to - this value.
+    The waveform samples are proportions of this value that the output should be set to.
+    Note that it will stay at this value throughout the whole experiment.
+    
+    PARAMETERS
+    ----------
+    amplitude : :obj:`float`
+      Amplitude in volts.
+      Will be precise to the nearest millivolt.
+    """
     self.parent_device.init_amplitude(int(self.connection), amplitude)
   
 class SpectrumAwgOutCopy(labscript.Output):
+  """
+  A :obj:`labscript.Device` representing an individual output port of an AWG.
+  This particular output port will copy the behaviour of another port (see double and differential output modes in AWG manual).
+
+  .. note::
+    A port can only be copied if it has an even port number, and the port that copies it must have the next port number after that.
+    For example, port 3 can only copy port 2.
+
+  PARAMETERS
+  ----------
+  name : :obj:`str`
+    Name of the channel output in labscript and BLACs.
+  parent_device : :obj:`SpectrumAwg`
+    The AWG card that this output is a channel of.
+  connection : :obj:`str`
+    A string of the port index of the channel on the card.
+    For example, if this represents the channel sent to output port 2 on a 4-port card, write :obj:`"2"`.
+  copied_device : :obj:`SpectrumAwgOut`
+    The output port that this port is going to copy.
+  differential : :obj:`bool`
+    If set to :obj:`False` (default), the port will be set to double output mode (copying the output), otherwise the port will be set to differential output mode (mirroring the output).
+    See card manual for more details.
+  """
   def __init__(self, name, parent_device, connection, copied_device:SpectrumAwgOut, differential = False):
     super().__init__(name, parent_device, connection, default_value = 0)
     self.differential = differential
@@ -77,6 +154,18 @@ class SpectrumAwgOutCopy(labscript.Output):
     self.parent_device.make_copy(copied_device.connection, connection, differential)
 
   def init_amplitude(self, amplitude):
+    """
+    Sets the amplitude of the output.
+    The output will vary from + to - this value.
+    The waveform samples are proportions of this value that the output should be set to.
+    Note that it will stay at this value throughout the whole experiment.
+    
+    PARAMETERS
+    ----------
+    amplitude : :obj:`float`
+      Amplitude in volts.
+      Will be precise to the nearest millivolt.
+    """
     self.parent_device.init_amplitude(int(self.connection), amplitude)
 
 #  =============================================================================================================
@@ -283,7 +372,7 @@ class SpectrumAwg(labscript.Device):
     server = int(server)
     client = int(client)
     if client - server != 1:
-      raise Exception(f"A copy of channel {server} must be placed on channel {server + 1}.")
+      raise ValueError(f"A copy of channel {server} must be placed on channel {server + 1}.")
     
     if differential:
       self.differentials.append(server)
