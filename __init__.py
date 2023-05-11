@@ -700,21 +700,27 @@ class SpectrumAwgWorkerMidFlight(mp.Process):
 #  =============================================================================================================
 
 class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
+  """
+  The main worker thread for the Spectrum AWG.
+  It implements the front-panel control of the :obj:`SpectrumAwgTab`, as well as handles moving to the buffered mode by hand-passing control of the card to a :obj:`SpectrumAwgWorkerMidFlight`.
+  """
   
   amplitude_min   = 80e-3
+  """
+  The smallest acceptable amplitude in volts for any AWG channel.
+  """
+
   sample_rate_min = 50
-
-  # def __init__(self, *args, **kwargs):
-  #   self.manual_queue = mp.Queue()
-  #   super().__init__(*args, **kwargs)
-
-  # def start(self, *args, **kwargs):
-  #   to_queue, from_queue = super().start(*args, **kwargs)
-  #   self.manual_queue = to_queue
-  #   return to_queue, from_queue
+  """
+  The smallest acceptable sample rate in MHz for the card.
+  """
 
   def init(self):
-    # self.BLACS_connection   = workerargs["connection"]
+    """
+    Initialises the manual front-panel mode for the :obj:`SpectrumAwgTab`.
+    """
+
+    # Wait to get control of the AWG from any other thread using it.
     self.card = None
     while self.card is None:
       try:
@@ -725,28 +731,41 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
         self.card = None
         tm.sleep(TIME_OUT)
 
+    # Initialise card.
     self.card.stop()
     self.card.reset()
     self.card_name          = self.card.get_name()
     self.number_of_channels = self.card.get_number_of_channels_per_front_end_module()
     time_string             = dtm.datetime.now().strftime("%Y%m%dT%H%M%S")
 
-    self.worker_mid_flight = None
-    self.manual_queue = mp.Queue()
-
+    # Print card information.
     print(f"{time_string}> Initialised AWG card:")
     print(f"  Model: {self.card_name}")
     print(f"  Channels: {self.number_of_channels}")
     print(f"  Memory: {self.card.get_max_memory_size()/(2**30)} GiB")
-    # print(f"Temperatures: FPGA: {self.card.get_temperature_base()} degC, Amplifier: {self.card.get_temperature_module_1()} degC")
-    self.front_panel_previous = {}
 
+    # Set up front panel synthesiser mode for the SpectrumAwgTab.
+    self.front_panel_previous = {}
     self.manual_waveform  = ["" for channel_index in range(self.number_of_channels)]
     self.manual_waveforms = ["Sine", "Square", "Sawtooth"]
     self.segment_size     = 512
     self.signals          = [None for channel_index in range(self.number_of_channels)]
 
+    # Set up multiprocessing for programming the card during a shot.
+    self.worker_mid_flight = None
+    self.manual_queue = mp.Queue()
+
   def program_manual(self, front_panel_values):
+    """
+    Respond to user input from the :obj:`SpectrumAwgTab` GUI.
+
+    PARAMETERS
+    ----------
+    front_panel_values : :obj:`dict`
+      The current state of the GUI.
+    """
+
+    # Handle a change in sample rate or segment size, including resetting the waveforms.
     for key, value in front_panel_values.items():
       if key not in ["Sample rate", "Segment size"]:
         continue
@@ -769,6 +788,8 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
         for channel_index in range(self.number_of_channels):
           self.manual_waveform[channel_index] = ""
           self.signals = [None for channel_index in range(self.number_of_channels)]
+    
+    # Make sure the waveform buttons act as radio buttons.
     waveform_decided = [False for channel_index in range(self.number_of_channels)]
     for key, value in front_panel_values.items():
       key_split = key.split(":")
@@ -786,6 +807,8 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
         else:
           front_panel_values[f"Sine:{channel_index}"] = True
           self.manual_waveform[channel_index] = "Sine"
+
+    # Handle a change in channel waveforms.
     for key, value in front_panel_values.items():
       key_split = key.split(":")
       if len(key_split) < 2:
@@ -827,6 +850,7 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
               if front_panel_values[f"Output enable:{channel_index}"]:
                 self.card.output_enable(channel_index)
     
+    # Handle a change in card properties.
     for key, value in front_panel_values.items():
       valid_keys = ["Identify", "Enable"]
       for channel_index in range(self.number_of_channels):
@@ -847,6 +871,7 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
           self.card.stop()
           self.card.execute_commands(disable_trigger = True)
       
+      # Handle a change in channel properties.
       for channel_index in range(self.number_of_channels):
         if key == f"Amplitude:{channel_index}":
           if value < self.amplitude_min:
@@ -857,20 +882,35 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
             self.card.output_enable(channel_index)
           else:
             self.card.output_disable(channel_index)
-      
+    
     self.front_panel_previous = front_panel_values.copy()
     return front_panel_values 
 
   def transition_to_buffered(self, device_name, h5file, initial_values, fresh):
+    """
+    Starts a thread of :obj:`SpectrumAwgWorkerMidFlight` which programs the AWG and handles in mid-shot.
+
+    PARAMETERS
+    ----------
+    device_name : :obj:`str`
+      Name of device in :obj:`labscript`.
+    h5file : :obj:`str`
+      Path to the :obj:`h5py.File` generated by :meth:`SpectrumAwg.generate_code`.
+    initial_values :
+      Unused.
+    fresh :
+      Unused.
+    """
     time_string = dtm.datetime.now().strftime("%Y%m%dT%H%M%S")
     print(f"{time_string}> Preparing for shot:")
-
-    done_queue = mp.Queue()
-
     self.card.close()
+    
+    # Create thread to handle card mid-shot.
+    done_queue = mp.Queue()
     self.worker_mid_flight = SpectrumAwgWorkerMidFlight(done_queue, self.manual_queue, h5file, device_name, self.BLACS_connection)
     self.worker_mid_flight.start()
 
+    # Print out any messages from the thread, and end this method when it calls "Release".
     while True:
       arguments, keyword_arguments = done_queue.get()
       if "Release" in arguments:
@@ -880,12 +920,24 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
     return initial_values
 
   def transition_to_manual(self, abort = False):
+    """
+    Ends the shot and takes back control of the AWG into this thread.
+
+    PARAMETERS
+    ----------
+    abort :
+      Unused.
+    """
+
+    # Kill worker_mid_flight thread.
     if self.worker_mid_flight is not None:
       self.manual_queue.put("Manual")
       print("  Waiting for mid-flight worker...")
       self.worker_mid_flight.join()
       print("  Transferred card from mid-flight worker to main worker.")
       self.worker_mid_flight = None
+
+    # Take control of AWG.
     self.card = None
     while self.card is None:
       try:
@@ -895,6 +947,8 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
         self.card.close()
         self.card = None
         tm.sleep(TIME_OUT)
+
+    # Reset AWG for manual control.
     self.card.stop()
     self.card.reset()
     self.card.use_mode_single()
@@ -904,15 +958,22 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
     return True
 
   def abort_transition_to_buffered(self):
+    """
+    Calls :obj:`transition_to_manual`.
+    """
     return self.transition_to_manual(True)
       
   def abort_buffered(self):
+    """
+    Calls :obj:`transition_to_manual`.
+    """
     return self.transition_to_manual(True)
-  
-  # def __del__(self):
-  #   self.shutdown()
 
   def shutdown(self):
+    """
+    If in buffered mode, safely kills the :obj:`SpectrumAwgWorkerMidFlight` thread.
+    If in manual mode, closes the card handle.
+    """
     if self.worker_mid_flight is not None:
       self.manual_queue.put("Manual")
       self.worker_mid_flight.join()
@@ -923,21 +984,29 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
       self.card.close()
 
   def check_remote_values(self):
-    front_panel_values = {
+    """
+    Polls the card and sees if its status matches that of the :obj:`SpectrumAwgTab`.
+
+    RETURNS
+    -------
+    remote_values : :obj:`dict`
+      Current status of the card.
+    """
+    remote_values = {
       "Identify"    : self.card.get_card_identification() != 0,
       "Enable"      : "Ready" not in self.card.get_status_information(),
       "Sample rate" : self.card.get_sample_rate()/1e6,
     }
 
-    if front_panel_values["Sample rate"] < self.sample_rate_min:
-      front_panel_values["Sample rate"] = self.sample_rate_min
+    if remote_values["Sample rate"] < self.sample_rate_min:
+      remote_values["Sample rate"] = self.sample_rate_min
 
     for channel_index in range(self.number_of_channels):
-      front_panel_values[f"Output enable:{channel_index}"] = self.card.get_output_enable(channel_index) != 0
-      front_panel_values[f"Amplitude:{channel_index}"]     = self.card.get_amplitude(channel_index)
-      if front_panel_values[f"Amplitude:{channel_index}"] < self.amplitude_min:
-        front_panel_values[f"Amplitude:{channel_index}"] = self.amplitude_min
-    return front_panel_values
+      remote_values[f"Output enable:{channel_index}"] = self.card.get_output_enable(channel_index) != 0
+      remote_values[f"Amplitude:{channel_index}"]     = self.card.get_amplitude(channel_index)
+      if remote_values[f"Amplitude:{channel_index}"] < self.amplitude_min:
+        remote_values[f"Amplitude:{channel_index}"] = self.amplitude_min
+    return remote_values
 
 #  =============================================================================================================
 #   ____  _                   _____ _    _ _____   =============================================================
