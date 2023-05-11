@@ -15,7 +15,7 @@ Package reference
 .. package
 .. ---------------
 
-.. automodule:: __index__
+.. automodule:: labscript_spectrum_awg
    :members:
    :undoc-members:
    :show-inheritance:
