@@ -1021,7 +1021,30 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
 
 @labscript_devices.BLACS_tab
 class SpectrumAwgTab(blacs.device_base_class.DeviceTab):
+  """
+  A GUI for some simple functionality of the AWG.
+  The purpose of this is to be able to test to see if the card is working, rather than to actually run an experiment.
+
+  The top panel controls the card itself:
+
+  * :obj:`"Enable"` starts and stops a loop from running.
+  * :obj:`"Identify"` toggles the flashing identification mode of the status LED.
+  * :obj:`"Sample rate"` sets the sample rate of the card in MHz.
+  * :obj:`"Segment size"` sets the size of the waveforms being played in manual mode in samples.
+
+  The subsequent panels control properties of individual channels:
+
+  * :obj:`"Amplitude"` sets the peak value of the waveform in volts.
+  * :obj:`"Output enable"` enables a specific chanel.
+  * :obj:`"Sawtooth"`, :obj:`"Square"` and :obj:`"Sine"` is a selection between three waveforms that the chanel can output.
+
+  """
   def initialise_GUI(self):
+    """
+    Creates the GUI for the card.
+    Does some tricks to get correct device names etc.
+    """
+
     card = None
     while card is None:
       try:
@@ -1130,9 +1153,13 @@ class SpectrumAwgTab(blacs.device_base_class.DeviceTab):
     self.auto_place_widgets(*widgets)
 
   def restart(self, *args):
+    """
+    Makes sure that the :obj:`SpectrumAwgWorkerMidFlight` is killed when the refresh button is pressed.
+    Otherwise BLACs freezes.
+    """
     self.workers["worker"][1].put(("shutdown", [], {}))
-    # tm.sleep(1)
     return super().restart(*args)
+  
 #  =============================================================================================================
 #  __      ___                          ========================================================================
 #  \ \    / (_)                         ========================================================================
@@ -1146,6 +1173,17 @@ class SpectrumAwgTab(blacs.device_base_class.DeviceTab):
 
 @labscript_devices.runviewer_parser
 class SpectrumAwgViewer(object):
+  """
+  Currently doesn't do anything.
+  Sampling the AWG sequence at full resolution is very memory intensive.
+  I have written and commented out some code that subsamples the AWG waveform, although this too may get large fast for a sufficiently complicated sequence.
+
+  .. warning::
+
+    Uncomment at own risk!
+
+    
+  """
   def __init__(self, path, device):
     self.path = path
     self.name = device.name
