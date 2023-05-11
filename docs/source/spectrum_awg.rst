@@ -15,7 +15,7 @@ Package reference
 .. package
 .. ---------------
 
-.. automodule:: spectrum_awg
+.. automodule:: __index__
    :members:
    :undoc-members:
    :show-inheritance:
