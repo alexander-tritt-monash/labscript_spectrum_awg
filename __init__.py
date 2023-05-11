@@ -504,7 +504,30 @@ class SpectrumAwg(labscript.Device):
 #  =============================================================================================================
 
 class SpectrumAwgWorkerMidFlight(mp.Process):
+  """
+  A :obj:`multiprocessing.Process` that handles programming the AWG when going into buffered mode, as well as rearming the card before any retriggering occurs.
+
+  PARAMETERS
+  ----------
+  done_queue : :obj:`multiprocessing.Queue`
+    A :obj:`multiprocessing.Queue` that posts status messages to the main BLACs worker, :obj:`SpectrumAwgWorker`.
+    :obj:`SpectrumAwgWorker` will allow the shot to run once the final status message has been received by it.
+  manual_queue : :obj:`multiprocessing.Queue`
+    A :obj:`multiprocessing.Queue` that receives pseudo "interrupt request" messages from the main BLACs worker, :obj:`SpectrumAwgWorker`.
+    If a message is received, this thread will shut down the :obj:`spectrum_card.Card` instance safely as to not block it from being used by the main worker thread.
+  h5file : :obj:`str`
+    The path to the :obj:`h5py.File` which contains the instructions written by :obj:`SpectrumAwg` to be programmed to the card.
+  device_name : :obj:`str`
+    The name of the card, as written in the :obj:`h5py.File`.
+  address : :obj:`str`
+    The handle name of the card (as seen in Spectrum Control Center).
+  """
+
   wait_time = 1e-6
+  """
+  Polling time in seconds for checking card status during the shot.
+  """
+
   def __init__(self, done_queue:mp.Queue, manual_queue:mp.Queue, h5file:str, device_name:str, address:str):
     self.done_queue   = done_queue
     self.manual_queue = manual_queue
@@ -513,11 +536,19 @@ class SpectrumAwgWorkerMidFlight(mp.Process):
     self.device_name  = device_name
     super().__init__()
 
-  def print(self, *arguments, **keyword_arguments):
-    # print(*arguments, **keyword_arguments)
+  def _print(self, *arguments, **keyword_arguments):
+    """
+    Sends messages to be printed out by the :obj:`SpectrumAwgWorker` thread.
+    Uses the same arguments as the usual :obj:`print` function.
+    """
     self.done_queue.put(([*arguments], {**keyword_arguments}))
   
   def run(self):
+    """
+    Programs the AWG when going into buffered mode, as well as rearms the card before any retriggering occurs.
+    """
+
+    # Wait to get control of the AWG from any other thread using it.
     self.card = None
     while self.card is None:
       try:
@@ -528,10 +559,12 @@ class SpectrumAwgWorkerMidFlight(mp.Process):
         self.card = None
         tm.sleep(TIME_OUT)
     
+    # The following code is designed to safely close the card at any issues or requests to do so.
     try:
-      self.print("  Transferred card from main worker to mid-flight worker.")
+      self._print("  Transferred card from main worker to mid-flight worker.")
 
-      self.print(f"  Reading from HDF5...      ", end = " ")
+      # Program the card, while printing status.
+      self._print(f"  Reading from HDF5...      ", end = " ")
       data              = h5py.File(self.h5file, "r")
       group             = data[f"devices/{self.device_name}"]
       segments          = np.asarray(group["SEGMENTS"])
@@ -557,9 +590,9 @@ class SpectrumAwgWorkerMidFlight(mp.Process):
         "loop_until_trigger": np.asarray(sequence_group["LOOP_UNTIL_TRIGGER"])
       }
       data.close()
-      self.print("Done!")
+      self._print("Done!")
 
-      self.print(f"  Setting card parameters...", end = " ")
+      self._print(f"  Setting card parameters...", end = " ")
       self.card.stop()
       self.card.reset()
       self.card.use_mode_sequence()
@@ -587,27 +620,26 @@ class SpectrumAwgWorkerMidFlight(mp.Process):
             if (channel_index in copies) or (channel_index in differentials):
               self.card.output_enable(int(channel_index) + 1)
               self.card.set_amplitude(int(channel_index) + 1, amplitude)
-      self.print("Done!")
+      self._print("Done!")
 
-      self.print(f"  Transferring waveforms...  0%", end = "\r")
+      self._print(f"  Transferring waveforms...  0%", end = "\r")
       for segment_index in range(number_of_segments):
         signals = []
         segment_length = segment_lengths[segment_index]
         for channel_index in range(number_of_channels):
           signals.append(segments[segment_index, :segment_length, channel_index])
         self.card.array_to_device(signals, segment_index)
-        self.print(f"  Transferring waveforms...  {(segment_index + 1)*100//number_of_segments}%", end = "\r")
-      self.print(f"  Transferring waveforms...  Done!")
+        self._print(f"  Transferring waveforms...  {(segment_index + 1)*100//number_of_segments}%", end = "\r")
+      self._print(f"  Transferring waveforms...  Done!")
 
-      self.print(f"  Transferring sequence...   0%", end = "\r")
+      self._print(f"  Transferring sequence...   0%", end = "\r")
       sequence_index = 0
       sequence_size = len(sequence["step"])
       for step, next_step, segment, loops, end_of_sequence, loop_until_trigger in zip(sequence["step"], sequence["next_step"], sequence["segment"], sequence["loops"], sequence["end_of_sequence"], sequence["loop_until_trigger"]):
-        # print(step, next_step, segment, loops, end_of_sequence, loop_until_trigger)
         self.card.set_step_instruction(int(step), int(segment), int(loops), int(next_step), bool(loop_until_trigger), bool(end_of_sequence))
         sequence_index += 1
-        self.print(f"  Transferring sequence...   {(sequence_index + 1)*100//sequence_size}%", end = "\r")
-      self.print(f"  Transferring sequence...   Done!")
+        self._print(f"  Transferring sequence...   {(sequence_index + 1)*100//sequence_size}%", end = "\r")
+      self._print(f"  Transferring sequence...   Done!")
 
       self.card.set_start_step(start_steps[0])
       if not software_trigger:
@@ -615,37 +647,42 @@ class SpectrumAwgWorkerMidFlight(mp.Process):
         self.card.use_trigger_positive_edge(trigger_port, trigger_level, re_arm_threshold = re_arm_level)
         self.card.set_sufficient_triggers(**{f"external_{trigger_port}":True})
         self.card.arm()
-        self.print("  Card armed.")
+        self._print("  Card armed.")
       
       if software_trigger:
         self.card.arm()
         self.card.force_trigger()
-        self.print("  Card software triggered.")
+        self._print("  Card software triggered.")
 
-      self.print("Release")
+      # End of card programming, let the main worker know that the shot can start.
+      self._print("Release")
 
-      # for index in range(20):
-      #   print(self.card.get_status_information())
-      #   tm.sleep(1)
+      # Poll card status during the shot.
       ready = True
       for start_step in start_steps[1:]:
+        # Wait until the card starts running before telling it where the start of the next sequence is.
         while ready:
+          # Check for a request to stop the sequence.
           if self.manual_queue.qsize() > 0:
             raise Exception()
+          
           ready = "Ready" in self.card.get_status_information()
           tm.sleep(self.wait_time)
-        # print(self.card.get_status_information())
+
+        # Tell the card where the start of the next sequence is.
         self.card.set_start_step(start_step)
+
+        # Wait until the card stops running before re-arming it.
         while not ready:
+          # Check for a request to stop the sequence.
           if self.manual_queue.qsize() > 0:
             raise Exception()
+          
           ready = "Ready" in self.card.get_status_information()
           tm.sleep(self.wait_time)
-        # print(self.card.get_status_information())
-        
-        # print(self.card.get_start_step())
         self.card.arm()
-        # print(self.card.get_status_information())
+      
+      # Keep the thread running until it is requested to stop. Otherwise the card will be disabled and that's no good.
       self.manual_queue.get()
     except Exception:
       pass
