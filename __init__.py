@@ -15,6 +15,13 @@
 #                                                                   #
 #####################################################################
 
+"""
+This labscript device controls AWGs made by Spectrum Instrumentation https://spectrum-instrumentation.com/products/families/66xx_m4i_pci.php
+
+Detailed documentation:
+-----------------------
+"""
+
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 import numpy as np
@@ -23,9 +30,6 @@ import spectrum_card as sc
 import time as tm
 import datetime as dtm
 import multiprocessing as mp
-
-import qtutils.qt.QtWidgets as qw
-import qtutils.qt.QtGui as qg
 
 import labscript
 import labscript_devices
