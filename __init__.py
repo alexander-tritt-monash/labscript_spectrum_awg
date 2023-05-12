@@ -22,8 +22,6 @@ Detailed documentation
 ----------------------
 """
 
-from collections.abc import Callable, Iterable, Mapping
-from typing import Any
 import numpy as np
 import math
 import spectrum_card as sc
