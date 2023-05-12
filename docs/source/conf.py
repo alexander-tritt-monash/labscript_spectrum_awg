@@ -79,8 +79,9 @@ html_theme = "sphinx_rtd_theme"
 html_static_path = ['_static']
 
 intersphinx_mapping = {
-    "python"    : ("https://docs.python.org/3",                   None),
-    "numpy"     : ("https://numpy.org/doc/stable/",               None),
-    "labscript" : ("https://docs.labscriptsuite.org/en/latest/",  None),
-    "h5py"      : ("https://docs.h5py.org/en/stable/",            None)
+    "python"        : ("https://docs.python.org/3",                       None),
+    "numpy"         : ("https://numpy.org/doc/stable/",                   None),
+    "labscript"     : ("https://docs.labscriptsuite.org/en/latest/",      None),
+    "h5py"          : ("https://docs.h5py.org/en/stable/",                None),
+    "spectrum_card" : ("https://spectrum-card.readthedocs.io/en/latest/", None)
 }
