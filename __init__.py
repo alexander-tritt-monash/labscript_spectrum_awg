@@ -18,8 +18,8 @@
 """
 This labscript device controls AWGs made by Spectrum Instrumentation https://spectrum-instrumentation.com/products/families/66xx_m4i_pci.php
 
-Detailed documentation:
------------------------
+Detailed documentation
+----------------------
 """
 
 from collections.abc import Callable, Iterable, Mapping

@@ -6,15 +6,7 @@
 Documentation for the Spectrum AWG Labscript module
 ===================================================
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Contents:
-
-   spectrum_awg
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+.. automodule:: __init__
+   :members:
+   :undoc-members:
+   :show-inheritance:
