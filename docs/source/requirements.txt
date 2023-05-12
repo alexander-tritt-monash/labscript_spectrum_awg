@@ -1,2 +1,2 @@
-spectrum_card
+spectrum-card
 labscript
