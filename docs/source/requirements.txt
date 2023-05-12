@@ -1,2 +1,1 @@
 spectrum_card
-labscript-suite
