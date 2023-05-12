@@ -1,2 +1,2 @@
-spectrum_card == 1.0.0
+spectrum_card
 labscript
