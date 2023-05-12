@@ -1,11 +1,2 @@
-numpy
-math
 spectrum_card
-time
-datetime
-multiprocessing
 labscript
-labscript_devices
-blacs.tab_base_classes
-blacs.device_base_class
-labscript_utils.h5_lock
