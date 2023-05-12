@@ -50,7 +50,7 @@ extensions = [
 # This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = []
 add_module_names = False
-autodoc_mock_imports = ["labscript", "labscript_devices", "blacs.tab_base_classes", "blacs.device_base_class", "labscript_utils.h5_lock", "blacs"]
+autodoc_mock_imports = ["labscript", "labscript_devices", "blacs.tab_base_classes", "blacs.device_base_class", "labscript_utils.h5_lock", "blacs", "labscript_utils"]
 
 # Napoleon settings
 napoleon_google_docstring = False
