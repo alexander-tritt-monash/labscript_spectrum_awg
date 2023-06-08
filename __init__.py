@@ -24,7 +24,8 @@ Detailed documentation
 
 import numpy as np
 import math
-import spectrum_card as sc
+import  user_devices.spectrum_awg.spectrum_card_edit.spectrum_card as sc
+# import spectrum_card as sc
 import time as tm
 import datetime as dtm
 import multiprocessing as mp
@@ -218,7 +219,7 @@ class SpectrumAwg(labscript.Device):
 
   def __init__(self, name, BLACS_connection = "/dev/spcm0", **kwargs):
     self.BLACS_connection = BLACS_connection
-    labscript.Device.__init__(self, name, None, **kwargs)
+    labscript.Device.__init__(self, name, None, connection = BLACS_connection, **kwargs)
 
     self.sample_rate      = None
     self.instructions     = []
@@ -821,7 +822,7 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
 
           signal_length = self.segment_size
           if key_base == "Sine":
-            self.signals[key_channel_index] = np.sin(math.tau*np.arange(0, signal_length)/signal_length)
+            self.signals[key_channel_index] = np.sin(32*math.tau*np.arange(0, signal_length)/signal_length)
           if key_base == "Square":
             self.signals[key_channel_index] = np.sign(np.sin(math.tau*np.arange(0, signal_length)/signal_length))
           if key_base == "Sawtooth":
