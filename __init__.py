@@ -24,8 +24,7 @@ Detailed documentation
 
 import numpy as np
 import math
-import  user_devices.spectrum_awg.spectrum_card_edit.spectrum_card as sc
-# import spectrum_card as sc
+import spectrum_card as sc
 import time as tm
 import datetime as dtm
 import multiprocessing as mp
@@ -824,7 +823,7 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
           if key_base == "Sine":
             self.signals[key_channel_index] = np.sin(32*math.tau*np.arange(0, signal_length)/signal_length)
           if key_base == "Square":
-            self.signals[key_channel_index] = np.sign(np.sin(math.tau*np.arange(0, signal_length)/signal_length))
+            self.signals[key_channel_index] = np.sign(np.sin(math.tau*np.arange(0, signal_length)/signal_length))/math.sqrt(2)
           if key_base == "Sawtooth":
             self.signals[key_channel_index] = np.linspace(-1, 1, signal_length)
 
