@@ -18,8 +18,8 @@
 """
 This labscript device controls AWGs made by Spectrum Instrumentation https://spectrum-instrumentation.com/products/families/66xx_m4i_pci.php
 
-Detailed documentation
-----------------------
+Labscript API
+-------------
 """
 
 import numpy as np
@@ -565,6 +565,12 @@ class SpectrumAwgWorkerMidFlight(mp.Process):
       self._print(f"  Reading from HDF5...      ", end = " ")
       data              = h5py.File(self.h5file, "r")
       group             = data[f"devices/{self.device_name}"]
+      if "SEGMENTS" not in group:
+        data.close()
+        self._print("Done!")
+        self._print("  No instructions found.")
+        self._print("Release")
+        raise Exception
       segments          = np.asarray(group["SEGMENTS"])
       segment_lengths   = np.asarray(group["SEGMENTS"].attrs["LENGTHS"])
       connections       = np.asarray(group["SEGMENTS"].attrs["CONNECTIONS"])
@@ -679,11 +685,12 @@ class SpectrumAwgWorkerMidFlight(mp.Process):
           ready = "Ready" in self.card.get_status_information()
           tm.sleep(self.wait_time)
         self.card.arm()
-      
+
       # Keep the thread running until it is requested to stop. Otherwise the card will be disabled and that's no good.
       self.manual_queue.get()
+      
     except Exception:
-      pass
+      self.manual_queue.get()
     self.card.close()
 
 #  =============================================================================================================
@@ -765,7 +772,6 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
     """
 
     # Handle a change in sample rate or segment size, including resetting the waveforms.
-    print(front_panel_values)
     do_reset = False
     for key, value in front_panel_values.items():
       # Only look for changes in front panel
@@ -1046,6 +1052,8 @@ class SpectrumAwgTab(blacs.device_base_class.DeviceTab):
   The subsequent panels control properties of individual channels:
 
   * :obj:`"Amplitude"` sets the peak value of the waveform in volts.
+  * :obj:`"Frequency"` sets the frequency of the waveform in MHz.
+    Note that the frequency will be automatically changed so that a whole number of periods fit within the whole waveform.
   * :obj:`"Output enable"` enables a specific chanel.
   * :obj:`"Sawtooth"`, :obj:`"Square"` and :obj:`"Sine"` is a selection between three waveforms that the chanel can output.
 
