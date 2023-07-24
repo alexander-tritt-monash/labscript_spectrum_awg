@@ -744,10 +744,11 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
 
     # Set up front panel synthesiser mode for the SpectrumAwgTab.
     self.front_panel_previous = {}
-    self.manual_waveform  = ["" for channel_index in range(self.number_of_channels)]
-    self.manual_waveforms = ["Sine", "Square", "Sawtooth"]
-    self.segment_size     = 512
-    self.signals          = [None for channel_index in range(self.number_of_channels)]
+    self.manual_waveform    = ["" for channel_index in range(self.number_of_channels)]
+    self.manual_waveforms   = ["Sine", "Square", "Sawtooth"]
+    self.manual_frequencies = [0 for channel_index in range(self.number_of_channels)]
+    self.segment_size       = 512
+    self.signals            = [None for channel_index in range(self.number_of_channels)]
 
     # Set up multiprocessing for programming the card during a shot.
     self.worker_mid_flight = None
@@ -764,28 +765,34 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
     """
 
     # Handle a change in sample rate or segment size, including resetting the waveforms.
+    print(front_panel_values)
+    do_reset = False
     for key, value in front_panel_values.items():
-      if key not in ["Sample rate", "Segment size"]:
-        continue
+      # Only look for changes in front panel
       if key in self.front_panel_previous:
         if self.front_panel_previous[key] == value:
           continue
+      
       if key == "Sample rate":
         self.card.stop()
         if value < self.sample_rate_min:
           value = self.sample_rate_min
         self.card.set_sample_rate(value, "M")
-        for channel_index in range(self.number_of_channels):
-          self.manual_waveform[channel_index] = ""
-          self.signals = [None for channel_index in range(self.number_of_channels)]
+        do_reset = True
       if key == "Segment size":
         self.card.stop()
         self.segment_size = max(int(round(value/32)*32), 32)
         self.card.set_memory_size(self.segment_size)
         front_panel_values[key] = self.segment_size
-        for channel_index in range(self.number_of_channels):
-          self.manual_waveform[channel_index] = ""
-          self.signals = [None for channel_index in range(self.number_of_channels)]
+        do_reset = True
+      for channel_index in range(self.number_of_channels):
+        if key == f"Frequency:{channel_index}":
+          self.manual_frequencies[channel_index] = value
+          do_reset = True
+    if do_reset:
+      for channel_index in range(self.number_of_channels):
+        self.manual_waveform[channel_index] = ""
+        self.signals = [None for channel_index in range(self.number_of_channels)]
     
     # Make sure the waveform buttons act as radio buttons.
     waveform_decided = [False for channel_index in range(self.number_of_channels)]
@@ -815,17 +822,23 @@ class SpectrumAwgWorker(blacs.tab_base_classes.Worker):
       key_channel_index = int(key_split[1])
       if key_base in self.manual_waveforms:
         if value and self.manual_waveform[key_channel_index] != key_base:
+          self.manual_waveform[key_channel_index] = key_base
           for waveform in self.manual_waveforms:
             if waveform != key_base:
               front_panel_values[f"{waveform}:{key_channel_index}"] = False
 
           signal_length = self.segment_size
-          if key_base == "Sine":
-            self.signals[key_channel_index] = np.sin(32*math.tau*np.arange(0, signal_length)/signal_length)
-          if key_base == "Square":
-            self.signals[key_channel_index] = np.sign(np.sin(math.tau*np.arange(0, signal_length)/signal_length))/math.sqrt(2)
-          if key_base == "Sawtooth":
-            self.signals[key_channel_index] = np.linspace(-1, 1, signal_length)
+          sample_rate   = self.card.get_sample_rate()
+          time_end      = signal_length/sample_rate
+          self.manual_frequencies[key_channel_index] = np.round(self.manual_frequencies[key_channel_index]*1e6*time_end)/(time_end*1e6)
+          front_panel_values[f"Frequency:{key_channel_index}"] = self.manual_frequencies[key_channel_index]
+          phase = self.manual_frequencies[key_channel_index]*1e6*math.tau*np.arange(0, signal_length)/sample_rate
+          if self.manual_waveform[key_channel_index] == "Sine":
+            self.signals[key_channel_index] = np.sin(phase)
+          if self.manual_waveform[key_channel_index] == "Square":
+            self.signals[key_channel_index] = np.sign(np.sin(phase))/math.sqrt(2)
+          if self.manual_waveform[key_channel_index] == "Sawtooth":
+            self.signals[key_channel_index] = 2*np.fmod(phase/math.tau, 1) - 1
 
           signals_are_defined = True
           for signal in self.signals:
@@ -1097,16 +1110,24 @@ class SpectrumAwgTab(blacs.device_base_class.DeviceTab):
     }
     channel_analog_io = []
     for channel_index in range(number_of_channels):
-      channel_analog_io.append({
-        f"Amplitude:{channel_index}":{
-        "base_unit"   : "V",
-          "min"       : 80e-3,
-          "max"       : 2.5,
-          "step"      : 1/1e3,
-          "decimals"  : 3
+      channel_analog_io.append(
+        {
+          f"Amplitude:{channel_index}":{
+            "base_unit"   : "V",
+            "min"       : 80e-3,
+            "max"       : 2.5,
+            "step"      : 1/1e3,
+            "decimals"  : 3
+          },
+          f"Frequency:{channel_index}":{
+            "base_unit"   : "MHz",
+            "min"       : 0,
+            "max"       : 312.5,
+            "step"      : 1/1e3,
+            "decimals"  : 3
+          }
         }
-      }
-    )
+      )
 
     analog_io = {**card_analog_io}
     for channel_index in range(number_of_channels):
