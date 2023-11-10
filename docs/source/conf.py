@@ -20,7 +20,7 @@ sys.path.append(os.path.abspath("../../"))
 
 # -- Project information -----------------------------------------------------
 
-import sphinx_rtd_theme
+# import sphinx_rtd_theme
 
 project = 'Spectrum AWG'
 copyright = '2023, Alex Tritt'
