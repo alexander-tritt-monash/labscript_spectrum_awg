@@ -15,13 +15,6 @@
 #                                                                   #
 #####################################################################
 
-"""
-This labscript device controls AWGs made by Spectrum Instrumentation https://spectrum-instrumentation.com/products/families/66xx_m4i_pci.php
-
-Labscript API
--------------
-"""
-
 import numpy as np
 import math
 import spectrum_card as sc
@@ -65,10 +58,10 @@ class SpectrumAwgOut(labscript.Output):
   def __init__(self, name, parent_device, connection):
     super().__init__(name, parent_device, connection, default_value = 0)
 
-  def loop(self, time, wave:np.ndarray):
+  def set_wave_and_enable(self, time, wave:np.ndarray):
     """
     Starts a waveform :obj:`wave` playing on the channel at time :obj:`time`.
-    This waveform will keep looping until either another :meth:`loop` or :meth:`wait` command is called at a later time.
+    This waveform will keep looping until either another :meth:`set_wave_and_enable` or :meth:`disable` command is called at a later time.
 
     .. note::
 
@@ -77,7 +70,7 @@ class SpectrumAwgOut(labscript.Output):
 
     .. note::
 
-      If you are triggering the card, you will need to trigger the card the first time :meth:`loop` is called, as well as every time :meth:`loop` is called after :meth:`wait` is called.
+      If you are triggering the card, you will need to trigger the card the first time :meth:`set_wave_and_enable` is called, as well as every time :meth:`set_wave_and_enable` is called after :meth:`disable` is called.
     
     PARAMETERS
     ----------
@@ -96,18 +89,24 @@ class SpectrumAwgOut(labscript.Output):
     if wave.size % 32:
       raise ValueError("Waveform length must be a multiple of 32.")
     
-    self.parent_device._loop(int(self.connection), time, wave)
+    self.parent_device._set_wave_and_enable(int(self.connection), time, wave)
     return time
+  
+  def loop(self, time, wave:np.ndarray):
+    """
+    Legacy method.
+    """
+    self.disable(self, time, wave)
 
-  def wait(self, time):
+  def disable(self, time):
     """
     Stops the channel (and AWG card) from outputting anything.
-    That is, it stops a waveform from looping (that was set started by a :meth:`loop`)
-    It will stay dormant until another :meth:`loop` command is called at a later time (or call it at the end of a sequence).
+    That is, it stops a waveform from looping (that was set started by a :meth:`set_wave_and_enable`)
+    It will stay dormant until another :meth:`set_wave_and_enable` command is called at a later time (or call it at the end of a sequence).
 
     .. warning::
 
-      In the current implementation, calling :meth:`wait` on one channel will disable all channels.
+      In the current implementation, calling :meth:`disable` on one channel will disable all channels.
 
     PARAMETERS
     ----------
@@ -115,8 +114,14 @@ class SpectrumAwgOut(labscript.Output):
       The time at which to start playing the waveform.
 
     """
-    self.parent_device._wait(int(self.connection), time)
+    self.parent_device._disable(int(self.connection), time)
     return time
+  
+  def wait(self, time):
+    """
+    Legacy method.
+    """
+    self.disable(time)
   
   def init_amplitude(self, amplitude):
     """
@@ -265,7 +270,7 @@ class SpectrumAwg(labscript.Device):
 
     The :obj:`"SEQUENCE"` :obj:`h5py.Group` also contains some attributes relating to sequencing and triggers:
 
-    * :obj:`"START_STEPS"`: a :obj:`numpy.ndarray` of :obj:`int that determines the start point of the different sequences. A new sequence is started every time :meth:`SpectrumAwgOut.loop` is called after a call of :meth:`SpectrumAwgOut.wait`.
+    * :obj:`"START_STEPS"`: a :obj:`numpy.ndarray` of :obj:`int that determines the start point of the different sequences. A new sequence is started every time :meth:`SpectrumAwgOut.set_wave_and_enable` is called after a call of :meth:`SpectrumAwgOut.disable`.
     * :obj:`"SOFTWARE_TRIGGER"`: a :obj:`bool` where if :obj:`True`, the card will be triggered automatically (with inconsistent timing) as soon as the shot is loaded in BLACs.
     * :obj:`"TRIGGER_LEVEL"`: a :obj:`float` that determines the voltage on the trigger port that will trigger the card when first reached (that is, triggering happens on a positive edge).
     * :obj:`"RE_ARM_LEVEL"`: the voltage level that the trigger port must reach after a trigger before it is able to accept a second trigger.
@@ -450,7 +455,7 @@ class SpectrumAwg(labscript.Device):
     self.trigger_level    = float(level)
     self.re_arm_level     = float(re_arm_level)
 
-  def _loop(self, connection, time, wave):
+  def _set_wave_and_enable(self, connection, time, wave):
     wave_index = None
     for wave_table_index, wave_table_instance in enumerate(self.wave_table):
       if wave_table_instance is wave:
@@ -467,7 +472,7 @@ class SpectrumAwg(labscript.Device):
         "wave_index"  : wave_index
       }
     )
-  def _wait(self, connection, time):
+  def _disable(self, connection, time):
     self.instructions.append(
       {
         "instruction" : "wait",
