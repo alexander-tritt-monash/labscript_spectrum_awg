@@ -98,6 +98,40 @@ class SpectrumAwgOut(labscript.Output):
     """
     self.disable(self, time, wave)
 
+  def set_wave_until_trigger(self, time, wave:np.ndarray):
+    """
+    Starts a waveform :obj:`wave` playing on the channel at time :obj:`time`.
+    This waveform will keep looping until a trigger is sent to the AWG.
+
+    .. note::
+
+      The length of this waveform must be a multiple of :obj:`32`.
+      Also, when using multiple channels, you must make sure that each waveform being looped has the same length.
+
+    .. note::
+
+      If you are triggering the card, you will need to trigger the card the first time :meth:`set_wave_and_enable` is called, as well as every time :meth:`set_wave_and_enable` is called after :meth:`disable` and :meth:`set_wave_until_trigger` are called.
+    
+    PARAMETERS
+    ----------
+    time : :obj:`float`
+      The time at which to start playing the waveform.
+    wave : :obj:`numpy.ndarray`
+      The waveform to be looped.
+      Samples should be between :obj:`-1.0` and :obj:`1.0`.
+      Note that the length of this waveform must be a multiple of :obj:`32`.
+
+    RAISES
+    ------
+    :obj:`ValueError` :
+      If the length of :obj:`wave` is not a multiple of :obj:`32`.
+    """
+    if wave.size % 32:
+      raise ValueError("Waveform length must be a multiple of 32.")
+    
+    self.parent_device._set_wave_until_trigger(int(self.connection), time, wave)
+    return time
+
   def disable(self, time):
     """
     Stops the channel (and AWG card) from outputting anything.
@@ -289,9 +323,8 @@ class SpectrumAwg(labscript.Device):
     if self.sample_rate is None:
       raise Exception(f"Please set the sample rate for {self.name}.")
 
+    # Sort instructions from the shot file
     self.instructions.sort(key = lambda instruction : instruction["time"])
-    # print("Instructions:", self.instructions)
-
     connections = []
     for instruction in self.instructions:
       if instruction["connection"] not in connections:
@@ -299,11 +332,12 @@ class SpectrumAwg(labscript.Device):
     connections = np.array(sorted(connections), dtype = int)
     connection_to_channel = {connection:channel for channel, connection in enumerate(connections)}
 
+    # Synchronise the starting times of instructions
     interpolated_instructions = []
     current_waves = [None for channel in connections]
     current_time = -1
     for instruction in self.instructions:
-      if instruction["instruction"] == "loop":
+      if instruction["instruction"] in ["loop", "hold"]:
         current_wave = instruction["wave_index"]
       else:
         current_wave = 0
@@ -384,6 +418,24 @@ class SpectrumAwg(labscript.Device):
         sequence["end_of_sequence"].append    (False)
         sequence["loop_until_trigger"].append (False)
 
+      if instruction["instruction"] == "hold":
+        if not started:
+          started = True
+          start_steps.append(step_index)
+          next_time = instruction["time"]
+        started = False
+
+        current_time = next_time
+        if instruction_index >= len(interpolated_instructions):
+          raise Exception("No end condition for channel")
+
+        sequence["step"].append               (step_index)
+        sequence["next_step"].append          (step_index + 1)
+        sequence["segment"].append            (instruction["waves_index"])
+        sequence["loops"].append              (0)
+        sequence["end_of_sequence"].append    (False)
+        sequence["loop_until_trigger"].append (True)
+
       elif instruction["instruction"] == "wait":
         started = False
         
@@ -398,7 +450,7 @@ class SpectrumAwg(labscript.Device):
 
     group = self.init_device_group(hdf5_file)
 
-    group.create_dataset("SEGMENTS", compression=labscript.config.compression, data = segments)
+    group.create_dataset("SEGMENTS", compression = labscript.config.compression, data = segments)
     group["SEGMENTS"].attrs["LENGTHS"]            = segment_lengths
     group["SEGMENTS"].attrs["CONNECTIONS"]        = connections
     group["SEGMENTS"].attrs["SAMPLE_RATE"]        = int(self.sample_rate)
@@ -472,6 +524,25 @@ class SpectrumAwg(labscript.Device):
         "wave_index"  : wave_index
       }
     )
+
+  def _set_wave_until_trigger(self, connection, time, wave):
+    wave_index = None
+    for wave_table_index, wave_table_instance in enumerate(self.wave_table):
+      if wave_table_instance is wave:
+        wave_index = wave_table_index
+        break
+    if wave_index is None:
+      self.wave_table.append(wave)
+      wave_index = len(self.wave_table) - 1
+    self.instructions.append(
+      {
+        "instruction" : "hold",
+        "connection"  : connection,
+        "time"        : time,
+        "wave_index"  : wave_index
+      }
+    )
+
   def _disable(self, connection, time):
     self.instructions.append(
       {
