@@ -327,8 +327,11 @@ class SpectrumAwg(labscript.Device):
     self.instructions.sort(key = lambda instruction : instruction["time"])
     connections = []
     for instruction in self.instructions:
-      if instruction["connection"] not in connections:
-        connections.append(instruction["connection"])
+      if instruction["instruction"] != "wait":
+        if instruction["connection"] not in connections:
+          connections.append(instruction["connection"])
+    if len(connections) == 0:
+      return
     connections = np.array(sorted(connections), dtype = int)
     connection_to_channel = {connection:channel for channel, connection in enumerate(connections)}
 
@@ -449,8 +452,12 @@ class SpectrumAwg(labscript.Device):
       step_index += 1
 
     group = self.init_device_group(hdf5_file)
-
+    amplitude_indices = [amplitude[0] for amplitude in self.amplitudes]
+    for connection in connections:
+      if connection not in amplitude_indices:
+        raise Exception(f"No defined amplitude for channel {connection}.")
     group.create_dataset("SEGMENTS", compression = labscript.config.compression, data = segments)
+
     group["SEGMENTS"].attrs["LENGTHS"]            = segment_lengths
     group["SEGMENTS"].attrs["CONNECTIONS"]        = connections
     group["SEGMENTS"].attrs["SAMPLE_RATE"]        = int(self.sample_rate)
@@ -655,6 +662,8 @@ class SpectrumAwgWorkerMidFlight(mp.Process):
       differentials     = np.asarray(group["SEGMENTS"].attrs["DIFFERENTIALS"])
       amplitudes        = np.asarray(group["SEGMENTS"].attrs["AMPLITUDES"])
       amplitude_indices = np.asarray(group["SEGMENTS"].attrs["AMPLITUDE_INDICES"])
+      number_of_channels = connections.size
+
       sequence_group    = group["SEQUENCE"]
       start_steps       = np.asarray(sequence_group.attrs["START_STEPS"])
       software_trigger  = sequence_group.attrs["SOFTWARE_TRIGGER"]
@@ -685,12 +694,15 @@ class SpectrumAwgWorkerMidFlight(mp.Process):
 
       number_of_channels = segments.shape[2]
       number_of_segments = segment_lengths.size
-      number_of_segments_round = 2**(math.ceil(math.log2(number_of_segments)))
+      number_of_segments_round = 2**(math.ceil(math.log2(number_of_segments + 1)))
+      self._print(f"\n    Number of segments (rounded): {number_of_segments_round}")
 
       self.card.set_number_of_segments(number_of_segments_round)
       self.card.set_memory_size(number_of_segments_round*segment_lengths.max())
+      self._print(f"    Memory size: {number_of_segments_round*segment_lengths.max()}")
 
       self.card.set_channels_enable(**{f"channel_{channel_index}":True for channel_index in connections})
+      self._print(f"    Using channels: {self.card.get_channels_enable()}")
       for channel_index in connections:
         for amplitude_index, amplitude in zip(amplitude_indices, amplitudes):
           if amplitude_index == channel_index:
@@ -700,26 +712,40 @@ class SpectrumAwgWorkerMidFlight(mp.Process):
             if (channel_index in copies) or (channel_index in differentials):
               self.card.output_enable(int(channel_index) + 1)
               self.card.set_amplitude(int(channel_index) + 1, amplitude)
-      self._print("Done!")
+      self._print("  Done!")
 
       self._print(f"  Transferring waveforms...  0%", end = "\r")
-      for segment_index in range(number_of_segments):
-        signals = []
-        segment_length = segment_lengths[segment_index]
-        for channel_index in range(number_of_channels):
-          signals.append(segments[segment_index, :segment_length, channel_index])
-        self.card.array_to_device(signals, segment_index)
-        self._print(f"  Transferring waveforms...  {(segment_index + 1)*100//number_of_segments}%", end = "\r")
-      self._print(f"  Transferring waveforms...  Done!")
+      try:
+        for segment_index in range(number_of_segments):
+          signals = []
+          segment_length = segment_lengths[segment_index]
+          # self._print(f"\n  {number_of_channels}\n")
+          for channel_index in range(number_of_channels):
+            signals.append(segments[segment_index, :segment_length, channel_index])
+          # self._print(f"  {signals}")
+          self.card.array_to_device(signals, segment_index)
+          self._print(f"  Transferring waveforms...  {(segment_index + 1)*100//number_of_segments}%", end = "\r")
+        self._print(f"  Transferring waveforms...  Done!")
+      except Exception as e:
+        # self._print(f"\n  Error :(\n  {e}")
+        import traceback
+        self._print(traceback.format_exc())
+        self._print("Release")
+        raise Exception
 
       self._print(f"  Transferring sequence...   0%", end = "\r")
-      sequence_index = 0
-      sequence_size = len(sequence["step"])
-      for step, next_step, segment, loops, end_of_sequence, loop_until_trigger in zip(sequence["step"], sequence["next_step"], sequence["segment"], sequence["loops"], sequence["end_of_sequence"], sequence["loop_until_trigger"]):
-        self.card.set_step_instruction(int(step), int(segment), int(loops), int(next_step), bool(loop_until_trigger), bool(end_of_sequence))
-        sequence_index += 1
-        self._print(f"  Transferring sequence...   {(sequence_index + 1)*100//sequence_size}%", end = "\r")
-      self._print(f"  Transferring sequence...   Done!")
+      try:
+        sequence_index = 0
+        sequence_size = len(sequence["step"])
+        for step, next_step, segment, loops, end_of_sequence, loop_until_trigger in zip(sequence["step"], sequence["next_step"], sequence["segment"], sequence["loops"], sequence["end_of_sequence"], sequence["loop_until_trigger"]):
+          self.card.set_step_instruction(int(step), int(segment), int(loops), int(next_step), bool(loop_until_trigger), bool(end_of_sequence))
+          sequence_index += 1
+          self._print(f"  Transferring sequence...   {(sequence_index + 1)*100//sequence_size}%", end = "\r")
+        self._print(f"  Transferring sequence...   Done!")
+      except Exception:
+        self._print("  Error :(")
+        self._print("Release")
+        raise Exception
 
       self.card.set_start_step(start_steps[0])
       if not software_trigger:
